@@ -3,15 +3,13 @@ const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const fetch = require('node-fetch');
 const chalk = require('chalk');
-const readline = require('readline'); // Pairing code input ke liye
 
 const FIREBASE_URL = process.env.FIREBASE_URL; 
 const userState = {};
 
-// Pairing Code Setup
+// Dono options enable kar diye hain
 const usePairingCode = true; 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+const phoneNumber = process.env.PHONE || "923XXXXXXXXX"; // GitHub Secrets mein PHONE save rakhen
 
 const log = {
     info: (msg) => console.log(chalk.cyan.bold(' [INFO] ') + chalk.white(msg)),
@@ -44,28 +42,36 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: !usePairingCode, // Agar pairing code use ho raha to QR off
+        printQRInTerminal: true, // QR Code hamesha print hoga
         logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"], // Pairing code ke liye browser identity lazmi hai
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
     });
 
-    // --- PAIRING CODE LOGIC START ---
-    if (usePairingCode && !sock.authState.creds.registered) {
-        console.clear();
-        console.log(chalk.yellow.bold("\n--- DIGITAL ZONE PAIRING SYSTEM ---"));
-        const phoneNumber = await question(chalk.cyan("💬 Enter your WhatsApp Number (with country code, e.g., 923001234567): "));
-        
-        const code = await sock.requestPairingCode(phoneNumber.trim());
-        console.log(chalk.green.bold(`\n🔥 YOUR PAIRING CODE: `) + chalk.white.bgGreen.bold(` ${code} `) + `\n`);
-        console.log(chalk.gray("1. Open WhatsApp > Linked Devices > Link a Device"));
-        console.log(chalk.gray("2. Select 'Link with phone number instead' and enter this code.\n"));
+    // --- DOUBLE LINKING SYSTEM (QR + PAIRING) ---
+    if (!sock.authState.creds.registered) {
+        if (usePairingCode) {
+            console.log(chalk.yellow.bold("\n--- DIGITAL ZONE PAIRING SYSTEM ---"));
+            await delay(5000); // Wait for connection
+            try {
+                const code = await sock.requestPairingCode(phoneNumber.trim());
+                console.log(chalk.green.bold(`\n🔥 PAIRING CODE: `) + chalk.white.bgGreen.bold(` ${code} `));
+                console.log(chalk.gray("Ya phir upar wala QR scan karen...\n"));
+            } catch (err) {
+                log.error("Pairing Code failed, use QR instead.");
+            }
+        }
     }
-    // --- PAIRING CODE LOGIC END ---
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        // QR manual handle karne ke liye (agar printQRInTerminal issue kare)
+        if (qr) {
+            qrcode.generate(qr, { small: true });
+        }
+
         if (connection === 'open') {
             log.success("Connected to WhatsApp Successfully.");
         }
@@ -86,7 +92,6 @@ async function startBot() {
 
         const footer = "\n\n──────────────────\n🔙 *B* = Back | 🏠 *M* = Menu | 🚪 *E* = Exit";
 
-        // Global Commands
         if (text === 'm' || text === 'menu' || text === 'hi') {
             userState[jid] = { step: 'MAIN_MENU' };
         } else if (text === 'e') {
@@ -97,7 +102,6 @@ async function startBot() {
         if (!userState[jid]) userState[jid] = { step: 'MAIN_MENU' };
         const u = userState[jid];
 
-        // --- STABLE BACK LOGIC ---
         if (text === 'b') {
             if (u.step === 'CATEGORY_SELECTION' || u.step === 'SELECT_NETWORK' || u.step === 'VIEW_TOOLS') {
                 u.step = 'MAIN_MENU';
@@ -108,7 +112,6 @@ async function startBot() {
             }
         }
 
-        // --- FLOW ENGINE ---
         if (u.step === 'MAIN_MENU' || (text === 'b' && u.step === 'MAIN_MENU')) {
             await sock.sendMessage(jid, { 
                 text: `👋 *Assalam Alaikum!*\n\n✨ Welcome to *Digital Zone* ✨\n1️⃣ *Sim Packages*\n2️⃣ *Digital Tools*\n\n_Reply with 1 or 2_` + footer
