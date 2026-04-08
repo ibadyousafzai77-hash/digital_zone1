@@ -1,11 +1,17 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const fetch = require('node-fetch');
 const chalk = require('chalk');
+const readline = require('readline'); // Pairing code input ke liye
 
 const FIREBASE_URL = process.env.FIREBASE_URL; 
 const userState = {};
+
+// Pairing Code Setup
+const usePairingCode = true; 
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 const log = {
     info: (msg) => console.log(chalk.cyan.bold(' [INFO] ') + chalk.white(msg)),
@@ -38,16 +44,29 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: true,
+        printQRInTerminal: !usePairingCode, // Agar pairing code use ho raha to QR off
         logger: pino({ level: 'silent' }),
+        browser: ["Ubuntu", "Chrome", "20.0.04"], // Pairing code ke liye browser identity lazmi hai
     });
+
+    // --- PAIRING CODE LOGIC START ---
+    if (usePairingCode && !sock.authState.creds.registered) {
+        console.clear();
+        console.log(chalk.yellow.bold("\n--- DIGITAL ZONE PAIRING SYSTEM ---"));
+        const phoneNumber = await question(chalk.cyan("💬 Enter your WhatsApp Number (with country code, e.g., 923001234567): "));
+        
+        const code = await sock.requestPairingCode(phoneNumber.trim());
+        console.log(chalk.green.bold(`\n🔥 YOUR PAIRING CODE: `) + chalk.white.bgGreen.bold(` ${code} `) + `\n`);
+        console.log(chalk.gray("1. Open WhatsApp > Linked Devices > Link a Device"));
+        console.log(chalk.gray("2. Select 'Link with phone number instead' and enter this code.\n"));
+    }
+    // --- PAIRING CODE LOGIC END ---
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'open') {
-            console.clear();
             log.success("Connected to WhatsApp Successfully.");
         }
         if (connection === 'close') {
@@ -83,11 +102,10 @@ async function startBot() {
             if (u.step === 'CATEGORY_SELECTION' || u.step === 'SELECT_NETWORK' || u.step === 'VIEW_TOOLS') {
                 u.step = 'MAIN_MENU';
             } else if (u.step === 'SHOW_PACKAGES') {
-                u.step = 'CATEGORY_SELECTION'; // Go back to 1 or 2 choice
+                u.step = 'CATEGORY_SELECTION'; 
             } else if (u.step === 'CONFIRM_ORDER') {
                 u.step = 'SHOW_PACKAGES';
             }
-            // Trigger auto-response for the new step
         }
 
         // --- FLOW ENGINE ---
@@ -107,7 +125,7 @@ async function startBot() {
                 u.step = 'VIEW_TOOLS';
                 const tools = await fetchData('tools');
                 let tMsg = "🛠 *Digital Zone Tools*\n\n";
-                if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n`);
+                if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n💰 PKR ${t.discount}\n⏳ ${t.subs}\n\n`);
                 else tMsg += "⚠️ No tools available.";
                 await sock.sendMessage(jid, { text: tMsg + footer });
             }
@@ -129,7 +147,7 @@ async function startBot() {
             }
         }
         else if (u.step === 'SHOW_PACKAGES') {
-            if (text === 'b') { // Handle Back from Packages to Network Selection
+            if (text === 'b') { 
                  u.step = 'SELECT_NETWORK';
                  return await sock.sendMessage(jid, { text: `📶 *Network Selection*\n\n🅣 *Telenor*\n🅩 *Zong*` + footer });
             }
