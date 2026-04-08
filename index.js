@@ -6,13 +6,11 @@ const FIREBASE_URL = process.env.FIREBASE_URL;
 
 const orderStates = {};
 
-// 🔥 FETCH SIM PACKAGES
 async function getSimPackages(network) {
     const res = await fetch(`${FIREBASE_URL}/sim_packages/${network}.json`);
     return await res.json();
 }
 
-// 🔥 FETCH TOOLS
 async function getTools() {
     const res = await fetch(`${FIREBASE_URL}/tools.json`);
     return await res.json();
@@ -56,88 +54,114 @@ async function startBot() {
 
         console.log(`📩 ${text}`);
 
-        // 👋 MAIN MENU
-        if (text.includes("hi") || text.includes("hello")) {
+        // MAIN MENU
+        if (text === "hi" || text === "menu") {
+            orderStates[sender] = { step: "MAIN" };
+
             await sock.sendMessage(sender, {
                 text: `👋 *Assalam Alaikum*
 
 ✨ Welcome to *Digital Zone*
 
-📌 Please select:
+1️⃣ *Sim Packages*
+2️⃣ *Tools*
 
-📶 *Sim Packages*
-🛠 *Tools*`
+🔙 Type M anytime for Menu`
             });
         }
 
-        // 📶 SIM MENU
-        else if (text === "sim packages") {
+        // MAIN MENU OPTIONS
+        else if (text === "1" && orderStates[sender]?.step === "MAIN") {
+            orderStates[sender] = { step: "SIM_MENU" };
+
             await sock.sendMessage(sender, {
                 text: `📶 *Sim Packages*
 
-📡 *Telenor*
-📡 *Zong*
-📡 *Jazz*
-📡 *Ufone*`
+🅣 *Telenor*
+🅩 *Zong*
+
+Reply:
+T → Telenor
+Z → Zong
+
+🔙 B = Back`
             });
         }
 
-        // 📡 NETWORK SELECT
-        else if (["telenor","zong","jazz","ufone"].includes(text)) {
+        else if (text === "2" && orderStates[sender]?.step === "MAIN") {
+            orderStates[sender] = { step: "TOOLS" };
 
-            const data = await getSimPackages(text);
+            const tools = await getTools();
 
-            if (!data) {
-                await sock.sendMessage(sender, { text: "❌ No packages available." });
-                return;
-            }
+            let msgText = `🛠 *Tools*\n\n`;
 
-            let msgText = `📡 *${text.toUpperCase()} PACKAGES*\n\n`;
-
-            Object.values(data).forEach(p => {
-                msgText += `📦 *${p.name}* - PKR ${p.price}\n`;
+            Object.values(tools || {}).forEach((t, i) => {
+                msgText += `${i+1}) ${t.name}\n`;
             });
 
-            msgText += `\n🛒 Type package name to order`;
+            msgText += `\n🔙 B = Back`;
 
             await sock.sendMessage(sender, { text: msgText });
         }
 
-        // 🛒 PACKAGE SELECT
-        else {
+        // BACK / MENU
+        else if (text === "m") {
+            orderStates[sender] = { step: "MAIN" };
+            await sock.sendMessage(sender, { text: "🔙 Back to Main Menu\n\nType hi" });
+        }
 
-            const networks = ["telenor","zong","jazz","ufone"];
+        else if (text === "b") {
+            orderStates[sender] = { step: "MAIN" };
+            await sock.sendMessage(sender, { text: "🔙 Back\n\nType hi" });
+        }
 
-            for (let net of networks) {
-                const data = await getSimPackages(net);
+        // NETWORK SELECT
+        else if (["t","z"].includes(text) && orderStates[sender]?.step === "SIM_MENU") {
 
-                if (data) {
-                    const found = Object.values(data).find(p => p.name.toLowerCase() === text);
+            const network = text === "t" ? "telenor" : "zong";
+            const data = await getSimPackages(network);
 
-                    if (found) {
-                        orderStates[sender] = {
-                            step: "WAITING_NUMBER",
-                            item: found
-                        };
+            orderStates[sender] = { step: "PACKAGE_SELECT", network, data };
 
-                        await sock.sendMessage(sender, {
-                            text: `🛒 *Order Selected*
+            let msg = `📡 *${network.toUpperCase()} PACKAGES*\n\n`;
 
-📦 Package: *${found.name}*
-💰 Price: PKR ${found.price}
+            Object.values(data || {}).forEach((p, i) => {
+                msg += `${i+1}) ${p.name} - PKR ${p.price}\n`;
+            });
 
-📱 Please send number:
-jis number par package lagana hai`
-                        });
+            msg += `\nSelect package number`;
 
-                        return;
-                    }
-                }
+            await sock.sendMessage(sender, { text: msg });
+        }
+
+        // PACKAGE SELECT
+        else if (orderStates[sender]?.step === "PACKAGE_SELECT") {
+
+            const index = parseInt(text) - 1;
+            const packages = Object.values(orderStates[sender].data || {});
+
+            if (packages[index]) {
+
+                const selected = packages[index];
+
+                orderStates[sender] = {
+                    step: "WAITING_NUMBER",
+                    item: selected
+                };
+
+                await sock.sendMessage(sender, {
+                    text: `🛒 *Order Selected*
+
+📦 ${selected.name}
+💰 PKR ${selected.price}
+
+📱 Enter number:`
+                });
             }
         }
 
-        // 📱 NUMBER INPUT
-        if (orderStates[sender]?.step === "WAITING_NUMBER") {
+        // NUMBER INPUT
+        else if (orderStates[sender]?.step === "WAITING_NUMBER") {
 
             const item = orderStates[sender].item;
 
@@ -158,35 +182,20 @@ jis number par package lagana hai`
             await sock.sendMessage(sender, {
                 text: `✅ *Order Placed Successfully!*
 
-📦 Package: *${item.name}*
-📱 Number: ${text}
-💰 Amount: PKR ${item.price}
+📦 ${item.name}
+📱 ${text}
+💰 PKR ${item.price}
 
-🚀 Your package will be activated shortly.
+🚀 Processing...
 
-🙏 Thank you for choosing *Digital Zone*!`
+🙏 Thanks for choosing Digital Zone`
             });
 
             delete orderStates[sender];
-            return;
-        }
-
-        // 🛠 TOOLS
-        else if (text === "tools") {
-
-            const tools = await getTools();
-
-            let msgText = `🛠 *Tools*\n\n`;
-
-            Object.values(tools || {}).forEach(t => {
-                msgText += `🤖 *${t.name}*\n`;
-            });
-
-            await sock.sendMessage(sender, { text: msgText });
         }
 
         else {
-            await sock.sendMessage(sender, { text: "❓ Type *hi* to start" });
+            await sock.sendMessage(sender, { text: "❓ Type hi to start" });
         }
 
     });
