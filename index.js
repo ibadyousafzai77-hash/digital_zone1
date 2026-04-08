@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
+Const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const fetch = require('node-fetch');
@@ -6,10 +6,6 @@ const chalk = require('chalk');
 
 const FIREBASE_URL = process.env.FIREBASE_URL; 
 const userState = {};
-
-// Dono options enable kar diye hain
-const usePairingCode = true; 
-const phoneNumber = process.env.PHONE || "923XXXXXXXXX"; // GitHub Secrets mein PHONE save rakhen
 
 const log = {
     info: (msg) => console.log(chalk.cyan.bold(' [INFO] ') + chalk.white(msg)),
@@ -42,37 +38,16 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: true, // QR Code hamesha print hoga
+        printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"], 
     });
-
-    // --- DOUBLE LINKING SYSTEM (QR + PAIRING) ---
-    if (!sock.authState.creds.registered) {
-        if (usePairingCode) {
-            console.log(chalk.yellow.bold("\n--- DIGITAL ZONE PAIRING SYSTEM ---"));
-            await delay(5000); // Wait for connection
-            try {
-                const code = await sock.requestPairingCode(phoneNumber.trim());
-                console.log(chalk.green.bold(`\n🔥 PAIRING CODE: `) + chalk.white.bgGreen.bold(` ${code} `));
-                console.log(chalk.gray("Ya phir upar wala QR scan karen...\n"));
-            } catch (err) {
-                log.error("Pairing Code failed, use QR instead.");
-            }
-        }
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        // QR manual handle karne ke liye (agar printQRInTerminal issue kare)
-        if (qr) {
-            qrcode.generate(qr, { small: true });
-        }
-
+        const { connection, lastDisconnect } = update;
         if (connection === 'open') {
+            console.clear();
             log.success("Connected to WhatsApp Successfully.");
         }
         if (connection === 'close') {
@@ -92,6 +67,7 @@ async function startBot() {
 
         const footer = "\n\n──────────────────\n🔙 *B* = Back | 🏠 *M* = Menu | 🚪 *E* = Exit";
 
+        // Global Commands
         if (text === 'm' || text === 'menu' || text === 'hi') {
             userState[jid] = { step: 'MAIN_MENU' };
         } else if (text === 'e') {
@@ -102,16 +78,19 @@ async function startBot() {
         if (!userState[jid]) userState[jid] = { step: 'MAIN_MENU' };
         const u = userState[jid];
 
+        // --- STABLE BACK LOGIC ---
         if (text === 'b') {
             if (u.step === 'CATEGORY_SELECTION' || u.step === 'SELECT_NETWORK' || u.step === 'VIEW_TOOLS') {
                 u.step = 'MAIN_MENU';
             } else if (u.step === 'SHOW_PACKAGES') {
-                u.step = 'CATEGORY_SELECTION'; 
+                u.step = 'CATEGORY_SELECTION'; // Go back to 1 or 2 choice
             } else if (u.step === 'CONFIRM_ORDER') {
                 u.step = 'SHOW_PACKAGES';
             }
+            // Trigger auto-response for the new step
         }
 
+        // --- FLOW ENGINE ---
         if (u.step === 'MAIN_MENU' || (text === 'b' && u.step === 'MAIN_MENU')) {
             await sock.sendMessage(jid, { 
                 text: `👋 *Assalam Alaikum!*\n\n✨ Welcome to *Digital Zone* ✨\n1️⃣ *Sim Packages*\n2️⃣ *Digital Tools*\n\n_Reply with 1 or 2_` + footer
@@ -128,7 +107,7 @@ async function startBot() {
                 u.step = 'VIEW_TOOLS';
                 const tools = await fetchData('tools');
                 let tMsg = "🛠 *Digital Zone Tools*\n\n";
-                if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n💰 PKR ${t.discount}\n⏳ ${t.subs}\n\n`);
+                if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n`);
                 else tMsg += "⚠️ No tools available.";
                 await sock.sendMessage(jid, { text: tMsg + footer });
             }
@@ -150,7 +129,7 @@ async function startBot() {
             }
         }
         else if (u.step === 'SHOW_PACKAGES') {
-            if (text === 'b') { 
+            if (text === 'b') { // Handle Back from Packages to Network Selection
                  u.step = 'SELECT_NETWORK';
                  return await sock.sendMessage(jid, { text: `📶 *Network Selection*\n\n🅣 *Telenor*\n🅩 *Zong*` + footer });
             }
