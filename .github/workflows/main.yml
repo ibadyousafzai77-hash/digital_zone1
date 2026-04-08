@@ -1,9 +1,11 @@
 name: Digital Zone WhatsApp Bot
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *' 
+    - cron: '0 */5 * * *' # Har 5 ghanty baad restart hoga
 
 jobs:
   build:
@@ -17,13 +19,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' # Is se installation fast ho jati hai
 
       - name: Install Dependencies
         run: npm install
 
-      - name: Start Bot (Keep Alive)
+      - name: Start Digital Zone Agent
         env:
           FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
         run: |
-          node index.js &
-          sleep 21600
+          # Bot ko background mein start karke 5 ghanty (18000 seconds) tak zinda rakhna
+          node index.js & 
+          sleep 18000
