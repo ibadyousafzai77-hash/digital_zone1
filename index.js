@@ -2,10 +2,10 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const fetch = require('node-fetch');
-const chalk = require('chalk'); // Terminal styling ke liye
+const chalk = require('chalk');
 
 // --- CONFIGURATION ---
-const FIREBASE_URL = "APNI_FIREBASE_URL_YAHAN_LIKHEN"; // Apna Firebase Link yahan dalen
+const FIREBASE_URL = process.env.FIREBASE_URL; 
 const userState = {};
 
 // --- STYLISH CONSOLE LOGS ---
@@ -13,7 +13,7 @@ const log = {
     info: (msg) => console.log(chalk.cyan.bold(' [INFO] ') + chalk.white(msg)),
     success: (msg) => console.log(chalk.green.bold(' [SUCCESS] ') + chalk.white(msg)),
     error: (msg) => console.log(chalk.red.bold(' [ERROR] ') + chalk.white(msg)),
-    msg: (from, text) => console.log(chalk.yellow.bold(` 📩 Message: `) + chalk.white(`${from} -> ${text}`))
+    msg: (from, text) => console.log(chalk.yellow.bold(` 📩 Msg: `) + chalk.white(`${from} -> ${text}`))
 };
 
 // --- DATA HANDLERS ---
@@ -78,22 +78,43 @@ async function startBot() {
         
         log.msg(jid.split('@')[0], text);
 
-        // --- GREETING & RESET ---
-        if (text === 'hi' || text === 'menu' || text === 'm' || !userState[jid]) {
+        // --- UNIVERSAL CONTROLS ---
+        if (text === 'm' || text === 'menu' || text === 'hi') {
             userState[jid] = { step: 'MAIN_MENU' };
+        } else if (text === 'e') {
+            delete userState[jid];
+            return await sock.sendMessage(jid, { text: "👋 *Digital Zone* se rabta karne ka shukria. Allah Hafiz!\n\n_Type 'hi' to start again._" });
         }
 
+        if (!userState[jid]) userState[jid] = { step: 'MAIN_MENU' };
         const state = userState[jid];
 
-        // --- BACK BUTTON LOGIC ---
+        // --- UNIVERSAL FOOTER ---
+        const footer = "\n\n──────────────────\n🔙 *B* = Back | 🏠 *M* = Menu | 🚪 *E* = Exit";
+
+        // --- BACK LOGIC ---
         if (text === 'b') {
-            if (state.step === 'SELECT_NETWORK' || state.step === 'VIEW_TOOLS') state.step = 'MAIN_MENU';
-            else if (state.step === 'SHOW_PACKAGES') state.step = 'SELECT_NETWORK';
-            else if (state.step === 'CONFIRM_ORDER') state.step = 'SHOW_PACKAGES';
+            if (state.step === 'CATEGORY_SELECTION' || state.step === 'SELECT_NETWORK' || state.step === 'VIEW_TOOLS') {
+                state.step = 'MAIN_MENU';
+            } else if (state.step === 'SHOW_PACKAGES') {
+                state.step = 'SELECT_NETWORK';
+            } else if (state.step === 'CONFIRM_ORDER') {
+                state.step = 'SHOW_PACKAGES';
+            }
             
-            // Back janay ke baad menu dobara dikhana
+            // Foran menu dikhane ke liye agar back dabba diya
             if (state.step === 'MAIN_MENU') {
-                return await sock.sendMessage(jid, { text: "👋 *Assalam Alaikum!*\n\nWelcome back to *Digital Zone*\nHow can I help you today?\n\n1️⃣ *Sim Packages*\n2️⃣ *Digital Tools*\n\n_Reply with 1 or 2_" });
+                return await sock.sendMessage(jid, { 
+                    text: `👋 *Assalam Alaikum!*
+
+✨ Welcome back to *Digital Zone* ✨
+Premium Digital Services at your doorstep.
+
+1️⃣ *Sim Packages* (Telenor/Zong)
+2️⃣ *Digital Tools*
+
+_Please reply with 1 or 2_` + footer
+                });
             }
         }
 
@@ -104,12 +125,12 @@ async function startBot() {
                     text: `👋 *Assalam Alaikum!*
 
 ✨ Welcome to *Digital Zone* ✨
-Your premium destination for Digital Services.
+Premium Digital Services at your doorstep.
 
 1️⃣ *Sim Packages* (Telenor/Zong)
-2️⃣ *Tools & Software*
+2️⃣ *Digital Tools*
 
-Please reply with the *Number* of your choice.`
+_Please reply with 1 or 2_` + footer
                 });
                 state.step = 'CATEGORY_SELECTION';
                 break;
@@ -124,17 +145,18 @@ Please choose your network:
 🅣 *Telenor*
 🅩 *Zong*
 
-_Type *T* or *Z*_
-🔙 *B* = Back` 
+_Reply with *T* or *Z*_` + footer
                     });
                 } else if (text === '2') {
                     state.step = 'VIEW_TOOLS';
                     const tools = await fetchData('tools');
                     let tMsg = "🛠 *Digital Zone Tools*\n\n";
-                    if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n`);
-                    else tMsg += "No tools available right now.";
-                    tMsg += "\n🔙 Type *B* to go back";
-                    await sock.sendMessage(jid, { text: tMsg });
+                    if(tools) {
+                        Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n`);
+                    } else {
+                        tMsg += "⚠️ No tools available right now.";
+                    }
+                    await sock.sendMessage(jid, { text: tMsg + footer });
                 }
                 break;
 
@@ -147,13 +169,13 @@ _Type *T* or *Z*_
                     state.step = 'SHOW_PACKAGES';
                     
                     let pMsg = `📡 *${net.toUpperCase()} SPECIAL OFFERS*\n\n`;
-                    if(pkgs) {
+                    if(pkgs && Object.keys(pkgs).length > 0) {
                         Object.values(pkgs).forEach((p, i) => pMsg += `*${i+1}* ➔ ${p.name}\n💰 Price: *PKR ${p.price}*\n\n`);
-                        pMsg += "Reply with the *Package Number* to buy.\n🔙 *B* = Back";
+                        pMsg += "Reply with *Package Number* to buy.";
                     } else {
-                        pMsg = "⚠️ No packages found for this network.";
+                        pMsg = "⚠️ No packages found for this network. Please add packages from Admin Panel.";
                     }
-                    await sock.sendMessage(jid, { text: pMsg });
+                    await sock.sendMessage(jid, { text: pMsg + footer });
                 }
                 break;
 
@@ -170,21 +192,20 @@ _Type *T* or *Z*_
 💰 Price: *PKR ${items[idx].price}*
 
 ──────────────────
-Please enter the *Mobile Number* where you want this package:
-🔙 *B* = Back` 
+Please enter the *Mobile Number* for this package:` + footer 
                     });
                 }
                 break;
 
             case 'CONFIRM_ORDER':
-                // Check if text is a valid number (simple check)
-                if (text.length >= 10) {
+                // Check if it's a number and not a control command
+                if (text.length >= 10 && !['b','m','e'].includes(text)) {
                     const order = {
                         number: text,
                         item: state.selectedItem.name,
                         price: state.selectedItem.price,
                         status: "Pending",
-                        time: new Date().toLocaleString()
+                        time: new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })
                     };
                     await postData('orders', order);
                     await sock.sendMessage(jid, { 
@@ -192,17 +213,14 @@ Please enter the *Mobile Number* where you want this package:
 
 Your order for *${state.selectedItem.name}* on number *${text}* has been received. 
 
-🚀 We will process it within 15-30 minutes. 
+🚀 We will process it shortly. 
 Thank you for choosing *Digital Zone*!` 
                     });
-                    delete userState[jid]; // Order complete, reset user
-                } else {
-                    await sock.sendMessage(jid, { text: "❌ Invalid Number! Please enter a valid 11-digit mobile number." });
+                    delete userState[jid]; // Reset
                 }
                 break;
         }
     });
 }
 
-// Start the Magic
 startBot();
