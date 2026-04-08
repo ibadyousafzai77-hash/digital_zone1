@@ -4,23 +4,21 @@ const pino = require('pino');
 
 const FIREBASE_URL = process.env.FIREBASE_URL;
 
-// 🔥 SIM PACKAGES
+const orderStates = {};
+
+// 🔥 FETCH SIM PACKAGES
 async function getSimPackages(network) {
     const res = await fetch(`${FIREBASE_URL}/sim_packages/${network}.json`);
     return await res.json();
 }
 
-// 🔥 TOOLS
+// 🔥 FETCH TOOLS
 async function getTools() {
     const res = await fetch(`${FIREBASE_URL}/tools.json`);
     return await res.json();
 }
 
 async function startBot() {
-    if (!FIREBASE_URL) {
-        console.log("❌ FIREBASE_URL missing!");
-        process.exit(1);
-    }
 
     const { state, saveCreds } = await useMultiFileAuthState('session_data');
     const { version } = await fetchLatestBaileysVersion();
@@ -54,93 +52,141 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe) return;
 
         const sender = msg.key.remoteJid;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
+        const text = (msg.message.conversation || "").toLowerCase();
 
         console.log(`📩 ${text}`);
 
-        // 👋 GREETING
+        // 👋 MAIN MENU
         if (text.includes("hi") || text.includes("hello")) {
-            await sock.sendMessage(sender, { 
-                text: `Assalam Alaikum
+            await sock.sendMessage(sender, {
+                text: `👋 *Assalam Alaikum*
 
-Welcome to Digital Zone
+✨ Welcome to *Digital Zone*
 
-1) Sim Packages
-2) Tools`
+📌 Please select:
+
+📶 *Sim Packages*
+🛠 *Tools*`
             });
         }
 
         // 📶 SIM MENU
-        else if (text === "1") {
-            await sock.sendMessage(sender, { 
-                text: `*Sim Packages*
+        else if (text === "sim packages") {
+            await sock.sendMessage(sender, {
+                text: `📶 *Sim Packages*
 
-1) Telenor
-2) Jazz
-3) Zong
-4) Ufone`
+📡 *Telenor*
+📡 *Zong*
+📡 *Jazz*
+📡 *Ufone*`
             });
         }
 
-        // 🛠 TOOLS MENU (Firebase)
-        else if (text === "2") {
+        // 📡 NETWORK SELECT
+        else if (["telenor","zong","jazz","ufone"].includes(text)) {
+
+            const data = await getSimPackages(text);
+
+            if (!data) {
+                await sock.sendMessage(sender, { text: "❌ No packages available." });
+                return;
+            }
+
+            let msgText = `📡 *${text.toUpperCase()} PACKAGES*\n\n`;
+
+            Object.values(data).forEach(p => {
+                msgText += `📦 *${p.name}* - PKR ${p.price}\n`;
+            });
+
+            msgText += `\n🛒 Type package name to order`;
+
+            await sock.sendMessage(sender, { text: msgText });
+        }
+
+        // 🛒 PACKAGE SELECT
+        else {
+
+            const networks = ["telenor","zong","jazz","ufone"];
+
+            for (let net of networks) {
+                const data = await getSimPackages(net);
+
+                if (data) {
+                    const found = Object.values(data).find(p => p.name.toLowerCase() === text);
+
+                    if (found) {
+                        orderStates[sender] = {
+                            step: "WAITING_NUMBER",
+                            item: found
+                        };
+
+                        await sock.sendMessage(sender, {
+                            text: `🛒 *Order Selected*
+
+📦 Package: *${found.name}*
+💰 Price: PKR ${found.price}
+
+📱 Please send number:
+jis number par package lagana hai`
+                        });
+
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 📱 NUMBER INPUT
+        if (orderStates[sender]?.step === "WAITING_NUMBER") {
+
+            const item = orderStates[sender].item;
+
+            const orderData = {
+                phone: text,
+                package: item.name,
+                price: item.price,
+                status: "Placed",
+                time: new Date().toISOString()
+            };
+
+            await fetch(`${FIREBASE_URL}/orders.json`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orderData)
+            });
+
+            await sock.sendMessage(sender, {
+                text: `✅ *Order Placed Successfully!*
+
+📦 Package: *${item.name}*
+📱 Number: ${text}
+💰 Amount: PKR ${item.price}
+
+🚀 Your package will be activated shortly.
+
+🙏 Thank you for choosing *Digital Zone*!`
+            });
+
+            delete orderStates[sender];
+            return;
+        }
+
+        // 🛠 TOOLS
+        else if (text === "tools") {
+
             const tools = await getTools();
 
-            let msg = "*Tools*\n\n";
-            Object.values(tools || {}).forEach((t, i) => {
-                msg += `${i+1}) ${t.name}\n`;
+            let msgText = `🛠 *Tools*\n\n`;
+
+            Object.values(tools || {}).forEach(t => {
+                msgText += `🤖 *${t.name}*\n`;
             });
 
-            await sock.sendMessage(sender, { text: msg });
-        }
-
-        // 📡 SIM NETWORKS (Firebase)
-        else if (text === "telenor" || text === "1") {
-            const data = await getSimPackages("telenor");
-
-            let msg = "*Telenor Packages*\n\n";
-            Object.values(data || {}).forEach((p, i) => {
-                msg += `${i+1}) ${p.name} - PKR ${p.price}\n`;
-            });
-
-            await sock.sendMessage(sender, { text: msg });
-        }
-
-        else if (text === "jazz" || text === "2") {
-            const data = await getSimPackages("jazz");
-
-            let msg = "*Jazz Packages*\n\n";
-            Object.values(data || {}).forEach((p, i) => {
-                msg += `${i+1}) ${p.name} - PKR ${p.price}\n`;
-            });
-
-            await sock.sendMessage(sender, { text: msg });
-        }
-
-        else if (text === "zong" || text === "3") {
-            const data = await getSimPackages("zong");
-
-            let msg = "*Zong Packages*\n\n";
-            Object.values(data || {}).forEach((p, i) => {
-                msg += `${i+1}) ${p.name} - PKR ${p.price}\n`;
-            });
-
-            await sock.sendMessage(sender, { text: msg });
-        }
-
-        else if (text === "ufone" || text === "4") {
-            const data = await getSimPackages("ufone");
-
-            let msg = "*Ufone Packages*\n\n";
-            Object.values(data || {}).forEach((p, i) => {
-                msg += `${i+1}) ${p.name} - PKR ${p.price}\n`;
-            });
-
-            await sock.sendMessage(sender, { text: msg });
+            await sock.sendMessage(sender, { text: msgText });
         }
 
         else {
-            await sock.sendMessage(sender, { text: "Type hi to start" });
+            await sock.sendMessage(sender, { text: "❓ Type *hi* to start" });
         }
 
     });
