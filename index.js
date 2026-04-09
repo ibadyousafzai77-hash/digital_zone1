@@ -14,13 +14,18 @@ const log = {
     msg: (from, text) => console.log(chalk.yellow.bold(` 📩 Msg: `) + chalk.white(`${from} -> ${text}`))
 };
 
+// --- STABLE FETCH WITH 15S TIMEOUT ---
 async function fetchData(path) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 seconds limit
+
     try {
-        const res = await fetch(`${FIREBASE_URL}/${path}.json`);
-        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+        const res = await fetch(`${FIREBASE_URL}/${path}.json`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) return null;
         return await res.json();
     } catch (e) { 
-        log.error("Fetch failed: " + e.message);
+        log.error("Network Lag: Firebase took too long. Skipping round.");
         return null; 
     }
 }
@@ -58,42 +63,42 @@ async function startBot() {
         browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
-    // --- STABLE & OPTIMIZED NOTIFICATION LOGIC ---
-    // Ab ye har 5 minute (300,000ms) baad check karega
+    // --- SMART NOTIFICATION LOOP (5 MIN) ---
     setInterval(async () => {
         try {
-            log.info("Checking database for approved/rejected orders...");
+            log.info("Checking database for updates...");
             const orders = await fetchData('orders');
-            if (!orders) return;
+            if (!orders || typeof orders !== 'object') return;
 
             for (const key in orders) {
                 const order = orders[key];
                 
-                // Sirf unhein notify karein jo pending nahi hain aur notified false hai
-                if (order.notified === false && (order.status === "Completed" || order.status === "Rejected")) {
-                    let noteMsg = "";
+                // Sirf approve/reject aur notified: false wale uthao
+                if (order && order.notified === false && (order.status === "Completed" || order.status === "Rejected")) {
                     
-                    if (order.status === "Completed") {
-                        noteMsg = `🎉 *GOOD NEWS!* \n\nYour order for *${order.item}* has been successfully activated. Enjoy your services! 🔥\n\nThank you for choosing *Digital Zone*!`;
-                    } else if (order.status === "Rejected") {
-                        noteMsg = `❌ *ORDER REJECTED* \n\nYour order for *${order.item}* has been rejected because your TID/Details were incorrect.\n\nPlease check and try again with valid payment proof.\n\n_Digital Zone Support_`;
+                    if (!order.user_jid) {
+                        await updateData(`orders/${key}`, { notified: true });
+                        continue;
                     }
 
-                    if (noteMsg && order.user_jid) {
-                        try {
-                            await sock.sendMessage(order.user_jid, { text: noteMsg });
-                            await updateData(`orders/${key}`, { notified: true });
-                            log.success(`Notification sent to ${order.user_jid.split('@')[0]}`);
-                        } catch (sendErr) {
-                            log.error("Failed to send WhatsApp message, will try again next cycle.");
-                        }
+                    let noteMsg = (order.status === "Completed") 
+                        ? `🎉 *GOOD NEWS!* \n\nYour order for *${order.item}* has been successfully activated. Enjoy! 🔥\n\n_Digital Zone_` 
+                        : `❌ *ORDER REJECTED* \n\nYour order for *${order.item}* was rejected due to incorrect TID/Details.\n\n_Digital Zone Support_`;
+
+                    try {
+                        await sock.sendMessage(order.user_jid, { text: noteMsg });
+                        await updateData(`orders/${key}`, { notified: true });
+                        log.success(`Notification sent to ${order.user_jid.split('@')[0]}`);
+                    } catch (sendErr) {
+                        log.error("WA Send Failed. Marking notified to prevent infinite loop.");
+                        await updateData(`orders/${key}`, { notified: true });
                     }
                 }
             }
         } catch (globalErr) {
-            log.error("Stable Loop: Connection Lag Detected. Skipping this round.");
+            log.error("Loop Error: Connection unstable, waiting for next cycle.");
         }
-    }, 300000); // 5 Minutes Cycle
+    }, 300000); // 5 Minutes
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -120,6 +125,7 @@ async function startBot() {
 
         const footer = "\n\n──────────────────\n🔙 *B* = Back | 🏠 *M* = Menu | 🚪 *E* = Exit";
 
+        // Global Commands
         if (text === 'm' || text === 'menu' || text === 'hi') {
             userState[jid] = { step: 'MAIN_MENU' };
         } else if (text === 'e') {
