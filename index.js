@@ -17,8 +17,12 @@ const log = {
 async function fetchData(path) {
     try {
         const res = await fetch(`${FIREBASE_URL}/${path}.json`);
+        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         return await res.json();
-    } catch (e) { return null; }
+    } catch (e) { 
+        log.error("Fetch failed: " + e.message);
+        return null; 
+    }
 }
 
 async function postData(path, data) {
@@ -54,15 +58,21 @@ async function startBot() {
         browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
-    // --- AUTO NOTIFICATION LOGIC (Approve/Reject) ---
-    // Ye hissa database mein tabdeeli check karta rahega
+    // --- STABLE & OPTIMIZED NOTIFICATION LOGIC ---
+    // Ab ye har 5 minute (300,000ms) baad check karega
     setInterval(async () => {
-        const orders = await fetchData('orders');
-        if (orders) {
+        try {
+            log.info("Checking database for approved/rejected orders...");
+            const orders = await fetchData('orders');
+            if (!orders) return;
+
             for (const key in orders) {
                 const order = orders[key];
-                if (!order.notified && (order.status === "Completed" || order.status === "Rejected")) {
+                
+                // Sirf unhein notify karein jo pending nahi hain aur notified false hai
+                if (order.notified === false && (order.status === "Completed" || order.status === "Rejected")) {
                     let noteMsg = "";
+                    
                     if (order.status === "Completed") {
                         noteMsg = `🎉 *GOOD NEWS!* \n\nYour order for *${order.item}* has been successfully activated. Enjoy your services! 🔥\n\nThank you for choosing *Digital Zone*!`;
                     } else if (order.status === "Rejected") {
@@ -73,13 +83,17 @@ async function startBot() {
                         try {
                             await sock.sendMessage(order.user_jid, { text: noteMsg });
                             await updateData(`orders/${key}`, { notified: true });
-                            log.success(`Notification sent to ${order.user_jid}`);
-                        } catch (err) { log.error("Failed to send notification"); }
+                            log.success(`Notification sent to ${order.user_jid.split('@')[0]}`);
+                        } catch (sendErr) {
+                            log.error("Failed to send WhatsApp message, will try again next cycle.");
+                        }
                     }
                 }
             }
+        } catch (globalErr) {
+            log.error("Stable Loop: Connection Lag Detected. Skipping this round.");
         }
-    }, 5000); // Har 5 second baad check karega
+    }, 300000); // 5 Minutes Cycle
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -202,7 +216,7 @@ async function startBot() {
             if (text.length > 5 && !['b','m','e'].includes(text)) {
                 const finalPrice = u.selectedItem.discount_price || u.selectedItem.discount;
                 const order = {
-                    user_jid: jid, // Zaroori Line: Notification ke liye
+                    user_jid: jid,
                     number_tid: text,
                     item: u.selectedItem.name,
                     price: finalPrice,
