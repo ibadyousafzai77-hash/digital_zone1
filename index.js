@@ -40,6 +40,8 @@ async function startBot() {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
+        // Browser setting pairing/styling ke liye behtar hai
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -72,7 +74,7 @@ async function startBot() {
             userState[jid] = { step: 'MAIN_MENU' };
         } else if (text === 'e') {
             delete userState[jid];
-            return await sock.sendMessage(jid, { text: "👋 *Digital Zone* se rabta karne ka shukria. Allah Hafiz!" });
+            return await sock.sendMessage(jid, { text: "👋 *Digital Zone* se rabta karne ka shukria. Allah Hafiz!\n\n*Type 'Hi' to start again*" });
         }
 
         if (!userState[jid]) userState[jid] = { step: 'MAIN_MENU' };
@@ -83,11 +85,12 @@ async function startBot() {
             if (u.step === 'CATEGORY_SELECTION' || u.step === 'SELECT_NETWORK' || u.step === 'VIEW_TOOLS') {
                 u.step = 'MAIN_MENU';
             } else if (u.step === 'SHOW_PACKAGES') {
-                u.step = 'CATEGORY_SELECTION'; // Go back to 1 or 2 choice
-            } else if (u.step === 'CONFIRM_ORDER') {
+                u.step = 'SELECT_NETWORK'; 
+            } else if (u.step === 'PAYMENT_INFO') {
                 u.step = 'SHOW_PACKAGES';
+            } else if (u.step === 'SUBMIT_DETAILS') {
+                u.step = 'PAYMENT_INFO';
             }
-            // Trigger auto-response for the new step
         }
 
         // --- FLOW ENGINE ---
@@ -106,9 +109,14 @@ async function startBot() {
             } else if (text === '2') {
                 u.step = 'VIEW_TOOLS';
                 const tools = await fetchData('tools');
+                u.tempData = tools;
                 let tMsg = "🛠 *Digital Zone Tools*\n\n";
-                if(tools) Object.values(tools).forEach((t, i) => tMsg += `🔹 ${i+1}. *${t.name}*\n`);
-                else tMsg += "⚠️ No tools available.";
+                if(tools) {
+                    Object.values(tools).forEach((t, i) => {
+                        tMsg += `*${i+1}* ➔ *${t.name}*\n💰 Price: PKR ${t.discount}\n⏳ Subs: ${t.subs}\n📝 Info: ${t.info}\n\n`;
+                    });
+                    tMsg += "_Reply with Number to Buy_";
+                } else tMsg += "⚠️ No tools available.";
                 await sock.sendMessage(jid, { text: tMsg + footer });
             }
         }
@@ -122,38 +130,64 @@ async function startBot() {
                 
                 let pMsg = `📡 *${net.toUpperCase()} SPECIAL OFFERS*\n\n`;
                 if(pkgs && Object.keys(pkgs).length > 0) {
-                    Object.values(pkgs).forEach((p, i) => pMsg += `*${i+1}* ➔ ${p.name}\n💰 PKR ${p.price}\n\n`);
-                    pMsg += "Reply with *Number* to buy.";
+                    Object.values(pkgs).forEach((p, i) => {
+                        pMsg += `*${i+1}* ➔ *${p.name}*\n🌐 Data: ${p.mbs}\n📞 Off-Net: ${p.off_net}\n☎️ On-Net: ${p.on_net}\n💬 SMS: ${p.sms}\n📅 Validity: ${p.validity}\n💰 Price: PKR ${p.discount_price}\n\n`;
+                    });
+                    pMsg += "Reply with *Number* to Buy.";
                 } else pMsg = "⚠️ No packages found.";
                 await sock.sendMessage(jid, { text: pMsg + footer });
             }
         }
-        else if (u.step === 'SHOW_PACKAGES') {
-            if (text === 'b') { // Handle Back from Packages to Network Selection
-                 u.step = 'SELECT_NETWORK';
-                 return await sock.sendMessage(jid, { text: `📶 *Network Selection*\n\n🅣 *Telenor*\n🅩 *Zong*` + footer });
-            }
+        else if (u.step === 'SHOW_PACKAGES' || u.step === 'VIEW_TOOLS') {
             const idx = parseInt(text) - 1;
             const items = Object.values(u.tempData || {});
             if (items[idx]) {
-                u.step = 'CONFIRM_ORDER';
                 u.selectedItem = items[idx];
+                u.step = 'PAYMENT_INFO';
+                const finalPrice = u.selectedItem.discount_price || u.selectedItem.discount;
+                
+                let payMsg = `🛒 *Selected:* ${u.selectedItem.name}\n💰 *Price:* PKR ${finalPrice}\n\n──────────────────\n*Type Y to proceed your order*` + footer;
+                
+                // Pkg Image support (agar Firebase mein image link hai)
+                if (u.selectedItem.image) {
+                    await sock.sendMessage(jid, { image: { url: u.selectedItem.image }, caption: payMsg });
+                } else {
+                    await sock.sendMessage(jid, { text: payMsg });
+                }
+            }
+        }
+        else if (u.step === 'PAYMENT_INFO') {
+            if (text === 'y') {
+                u.step = 'SUBMIT_DETAILS';
+                const finalPrice = u.selectedItem.discount_price || u.selectedItem.discount;
                 await sock.sendMessage(jid, { 
-                    text: `🛒 *Order Summary*\n📦 *${items[idx].name}*\n💰 *PKR ${items[idx].price}*\n\n──────────────────\nPlease enter the *Mobile Number*: ` + footer 
+                    text: `💳 *Payment Method*\n\nPlease send *RS. ${finalPrice}* to:\n\n📌 *Jazzcash*\n👤 Name: *Abadullah*\n📱 No: *03169645057*\n\n──────────────────\nAfter payment, type your *Mobile Number* and *TID* to confirm order.`
                 });
             }
         }
-        else if (u.step === 'CONFIRM_ORDER') {
-            if (text.length >= 10 && !['b','m','e'].includes(text)) {
+        else if (u.step === 'SUBMIT_DETAILS') {
+            if (text.length > 5 && !['b','m','e'].includes(text)) {
+                const finalPrice = u.selectedItem.discount_price || u.selectedItem.discount;
                 const order = {
-                    number: text,
+                    number_tid: text,
                     item: u.selectedItem.name,
-                    price: u.selectedItem.price,
+                    price: finalPrice,
                     status: "Pending",
                     time: new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })
                 };
+                
                 await postData('orders', order);
-                await sock.sendMessage(jid, { text: `✅ *ORDER PLACED!*\n\nPackage: *${u.selectedItem.name}*\nNumber: *${text}*\n\nWe will process it shortly!` });
+                
+                // Final Order Summary for User
+                let summaryMsg = `✅ *ORDER PLACED SUCCESSFULLY!*\n\n` +
+                                 `📦 *Item:* ${u.selectedItem.name}\n` +
+                                 `💰 *Amount:* PKR ${finalPrice}\n` +
+                                 `📝 *Details:* ${text}\n` +
+                                 `⏳ *Status:* Pending\n\n` +
+                                 `──────────────────\n` +
+                                 `Your package will be activated in a short while. Thank you for choosing *Digital Zone*!`;
+                
+                await sock.sendMessage(jid, { text: summaryMsg });
                 delete userState[jid];
             }
         }
