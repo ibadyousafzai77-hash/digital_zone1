@@ -14,10 +14,10 @@ const log = {
     msg: (from, text) => console.log(chalk.yellow.bold(` 📩 Msg: `) + chalk.white(`${from} -> ${text}`))
 };
 
-// --- FIX 1: STABLE FETCH WITH 15S AUTO-ABORT ---
+// --- FIX: STABLE FETCH WITH 15S AUTO-ABORT TO PREVENT 408 TIMEOUT ---
 async function fetchData(path) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s limit to prevent 408 Timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); 
 
     try {
         const res = await fetch(`${FIREBASE_URL}/${path}.json`, { signal: controller.signal });
@@ -25,7 +25,7 @@ async function fetchData(path) {
         if (!res.ok) return null;
         return await res.json();
     } catch (e) { 
-        log.error("Network Lag: Firebase took too long. Skipping this round.");
+        log.error("Network Lag: Firebase took too long. Skipping round.");
         return null; 
     }
 }
@@ -66,17 +66,25 @@ async function startBot() {
         keepAliveIntervalMs: 30000,
     });
 
-    // --- FIX 2: SMART & SILENT NOTIFICATION LOOP ---
+    // --- SMART NOTIFICATION LOOP (3 MINUTES + KEEP-ALIVE) ---
     setInterval(async () => {
         try {
+            // Check if WhatsApp is still connected
+            if (!sock.user) {
+                log.info("Waiting for WhatsApp connection...");
+                return;
+            }
+
+            // Keep GitHub server awake
+            await sock.sendPresenceUpdate('available');
             log.info("Checking database for updates...");
+
             const orders = await fetchData('orders');
             if (!orders || typeof orders !== 'object') return;
 
             for (const key in orders) {
                 const order = orders[key];
                 
-                // Only process if status is changed AND not notified yet
                 if (order && order.notified === false && (order.status === "Completed" || order.status === "Rejected")) {
                     
                     if (!order.user_jid) {
@@ -89,21 +97,25 @@ async function startBot() {
                         : `❌ *ORDER REJECTED* \n\nYour order for *${order.item}* was rejected due to incorrect TID/Details.\n\n_Digital Zone Support_`;
 
                     try {
-                        // Attempt to send WhatsApp message
+                        // Wake up connection before sending
+                        await sock.onWhatsApp(order.user_jid);
                         await sock.sendMessage(order.user_jid, { text: noteMsg });
-                        // If successful, mark as notified
+                        
                         await updateData(`orders/${key}`, { notified: true });
                         log.success(`Notification sent to ${order.user_jid.split('@')[0]}`);
+                        
+                        // Small delay between multiple messages
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                     } catch (sendErr) {
-                        log.error("WA Send Failed. Marking notified to prevent infinite loop errors.");
+                        log.error("WA Send Failed. Marking notified to stop 408 loops.");
                         await updateData(`orders/${key}`, { notified: true });
                     }
                 }
             }
         } catch (globalErr) {
-            log.error("Loop Lag: Connection unstable, waiting for next cycle.");
+            log.error("Loop Error: Connection unstable, waiting for next cycle.");
         }
-    }, 300000); // 5 Minutes Cycle to save resources
+    }, 180000); // 3 Minutes cycle is best for GitHub stability
 
     sock.ev.on('creds.update', saveCreds);
 
