@@ -23,12 +23,23 @@ async function fetchData(path) {
 
 async function postData(path, data) {
     try {
-        await fetch(`${FIREBASE_URL}/${path}.json`, {
+        const res = await fetch(`${FIREBASE_URL}/${path}.json`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-    } catch (e) { log.error("Post data fail"); }
+        return await res.json();
+    } catch (e) { log.error("Post data fail"); return null; }
+}
+
+async function updateData(path, data) {
+    try {
+        await fetch(`${FIREBASE_URL}/${path}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+    } catch (e) { log.error("Update data fail"); }
 }
 
 async function startBot() {
@@ -40,9 +51,35 @@ async function startBot() {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        // Browser setting pairing/styling ke liye behtar hai
         browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
+
+    // --- AUTO NOTIFICATION LOGIC (Approve/Reject) ---
+    // Ye hissa database mein tabdeeli check karta rahega
+    setInterval(async () => {
+        const orders = await fetchData('orders');
+        if (orders) {
+            for (const key in orders) {
+                const order = orders[key];
+                if (!order.notified && (order.status === "Completed" || order.status === "Rejected")) {
+                    let noteMsg = "";
+                    if (order.status === "Completed") {
+                        noteMsg = `🎉 *GOOD NEWS!* \n\nYour order for *${order.item}* has been successfully activated. Enjoy your services! 🔥\n\nThank you for choosing *Digital Zone*!`;
+                    } else if (order.status === "Rejected") {
+                        noteMsg = `❌ *ORDER REJECTED* \n\nYour order for *${order.item}* has been rejected because your TID/Details were incorrect.\n\nPlease check and try again with valid payment proof.\n\n_Digital Zone Support_`;
+                    }
+
+                    if (noteMsg && order.user_jid) {
+                        try {
+                            await sock.sendMessage(order.user_jid, { text: noteMsg });
+                            await updateData(`orders/${key}`, { notified: true });
+                            log.success(`Notification sent to ${order.user_jid}`);
+                        } catch (err) { log.error("Failed to send notification"); }
+                    }
+                }
+            }
+        }
+    }, 5000); // Har 5 second baad check karega
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -69,7 +106,6 @@ async function startBot() {
 
         const footer = "\n\n──────────────────\n🔙 *B* = Back | 🏠 *M* = Menu | 🚪 *E* = Exit";
 
-        // Global Commands
         if (text === 'm' || text === 'menu' || text === 'hi') {
             userState[jid] = { step: 'MAIN_MENU' };
         } else if (text === 'e') {
@@ -77,10 +113,9 @@ async function startBot() {
             return await sock.sendMessage(jid, { text: "👋 *Digital Zone* se rabta karne ka shukria. Allah Hafiz!\n\n*Type 'Hi' to start again*" });
         }
 
-        if (!userState[jid]) userState[jid] = { step: 'MAIN_MENU' };
+        if (!userState[jid]) return;
         const u = userState[jid];
 
-        // --- STABLE BACK LOGIC ---
         if (text === 'b') {
             if (u.step === 'CATEGORY_SELECTION' || u.step === 'SELECT_NETWORK' || u.step === 'VIEW_TOOLS') {
                 u.step = 'MAIN_MENU';
@@ -93,7 +128,6 @@ async function startBot() {
             }
         }
 
-        // --- FLOW ENGINE ---
         if (u.step === 'MAIN_MENU' || (text === 'b' && u.step === 'MAIN_MENU')) {
             await sock.sendMessage(jid, { 
                 text: `👋 *Assalam Alaikum!*\n\n✨ Welcome to *Digital Zone* ✨\n1️⃣ *Sim Packages*\n2️⃣ *Digital Tools*\n\n_Reply with 1 or 2_` + footer
@@ -148,7 +182,6 @@ async function startBot() {
                 
                 let payMsg = `🛒 *Selected:* ${u.selectedItem.name}\n💰 *Price:* PKR ${finalPrice}\n\n──────────────────\n*Type Y to proceed your order*` + footer;
                 
-                // Pkg Image support (agar Firebase mein image link hai)
                 if (u.selectedItem.image) {
                     await sock.sendMessage(jid, { image: { url: u.selectedItem.image }, caption: payMsg });
                 } else {
@@ -169,16 +202,17 @@ async function startBot() {
             if (text.length > 5 && !['b','m','e'].includes(text)) {
                 const finalPrice = u.selectedItem.discount_price || u.selectedItem.discount;
                 const order = {
+                    user_jid: jid, // Zaroori Line: Notification ke liye
                     number_tid: text,
                     item: u.selectedItem.name,
                     price: finalPrice,
                     status: "Pending",
+                    notified: false,
                     time: new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })
                 };
                 
                 await postData('orders', order);
                 
-                // Final Order Summary for User
                 let summaryMsg = `✅ *ORDER PLACED SUCCESSFULLY!*\n\n` +
                                  `📦 *Item:* ${u.selectedItem.name}\n` +
                                  `💰 *Amount:* PKR ${finalPrice}\n` +
